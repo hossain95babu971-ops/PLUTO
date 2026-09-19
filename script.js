@@ -382,6 +382,46 @@ document
 
   });
 
+/* =========================================
+   PHONE BACK BUTTON
+========================================= */
+
+let currentPage = "feedPage";
+
+const originalOpenPage = openPage;
+
+openPage = function (id) {
+
+  currentPage = id;
+
+  history.pushState(
+    { page: id },
+    "",
+    "#" + id
+  );
+
+  originalOpenPage(id);
+};
+
+
+history.replaceState(
+  { page: "feedPage" },
+  "",
+  "#feedPage"
+);
+
+
+window.addEventListener(
+  "popstate",
+  () => {
+
+    openPage(
+      "feedPage"
+    );
+
+  }
+);
+
 
 /* =========================================
    SIDE MENU
