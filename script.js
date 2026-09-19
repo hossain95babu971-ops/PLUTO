@@ -7067,7 +7067,7 @@ const hianimeFrame = document.getElementById("hianimeFrame");
 
 function openHianime() {
 
-  hianimeFrame.src = "https://hianime.at/";
+  hianimeFrame.src = "https://hianime.at/home";
 
   hianimeViewer.classList.add("active");
 }
