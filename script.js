@@ -23,6 +23,7 @@ let activeConversationId = null;
 let passwordRecoveryMode = false;
 
 let feedChannel = null;
+let feedLoadGeneration = 0;
 let messageChannel = null;
 let notificationChannel = null;
 let presenceChannel = null;
@@ -31,6 +32,21 @@ let lastSeenTimer = null;
 
 let selectedAvatarFile = null;
 let selectedCoverFile = null;
+let activePostMode = "post";
+let shortTrimObjectURL = "";
+let trimmedShortPreviewURL = "";
+let trimmedShortFile = null;
+let trimmedShortDuration = 0;
+let localVideoTrimmer = null;
+let localVideoTrimmerPromise = null;
+let shortViewerPosts = [];
+let activeShortIndex = 0;
+let shortViewerObserver = null;
+let homeStoryPosts = [];
+let activeHomeStoryIndex = 0;
+let shortCardLoadSequence = 0;
+let homeStoryTouchStartX = null;
+let videoLibraryPosts = [];
 
 let userSearchTimer = null;
 
@@ -129,6 +145,35 @@ function closeModal(id) {
     modal.classList.remove(
       "active"
     );
+
+    if (id === "shortViewerModal") {
+
+      shortViewerObserver?.disconnect();
+      shortViewerObserver = null;
+      $("shortViewerFeed")
+        ?.querySelectorAll("video")
+        .forEach(video => video.pause());
+
+      shortViewerPosts = [];
+      activeShortIndex = 0;
+
+    } else if (id === "homeStoryViewerModal") {
+
+      $("homeStoryVideo")?.pause();
+      homeStoryPosts = [];
+      activeHomeStoryIndex = 0;
+
+    } else if (
+      id === "commentsModal" &&
+      $("shortViewerModal")?.classList.contains("active")
+    ) {
+
+      $("shortViewerFeed")
+        ?.querySelector(`[data-short-index="${activeShortIndex}"] video`)
+        ?.play()
+        .catch(() => {});
+
+    }
 
   }
 
@@ -252,8 +297,8 @@ document
           event.target === modal
         ) {
 
-          modal.classList.remove(
-            "active"
+          closeModal(
+            modal.id
           );
 
         }
@@ -338,6 +383,15 @@ function openPage(id) {
   }
 
 
+  if (
+    id === "videoPage"
+  ) {
+
+    loadVideoLibrary();
+
+  }
+
+
   window.scrollTo({
     top: 0,
     behavior: "smooth"
@@ -382,7 +436,8 @@ document
 
   });
 
-/* =========================================
+
+  /* =========================================
    PHONE BACK BUTTON
 ========================================= */
 
@@ -1699,9 +1754,16 @@ async function compressImage(
    STORAGE
 ========================================= */
 
+const CLOUDINARY_CLOUD_NAME =
+  "doavq83pj";
+
+const CLOUDINARY_UPLOAD_PRESET =
+  "Pluto_1";
+
 async function uploadFile(
   file,
-  folder
+  folder,
+  onProgress = () => {}
 ) {
 
   if (
@@ -1728,63 +1790,131 @@ async function uploadFile(
   }
 
 
-  const extension =
-    file.name
-      .split(".")
-      .pop()
-      ?.toLowerCase()
-    ||
-    "bin";
+  if (
+    !CLOUDINARY_CLOUD_NAME ||
+    CLOUDINARY_CLOUD_NAME === "YOUR_CLOUD_NAME" ||
+    !CLOUDINARY_UPLOAD_PRESET ||
+    CLOUDINARY_UPLOAD_PRESET === "YOUR_UNSIGNED_UPLOAD_PRESET"
+  ) {
 
-
-  const path =
-    `${currentUser.id}/${folder}/${crypto.randomUUID()}.${extension}`;
-
-
-  const {
-    error
-  } =
-    await supabase
-      .storage
-      .from("media")
-      .upload(
-        path,
-        file,
-        {
-          cacheControl:
-            "3600",
-
-          upsert:
-            false,
-
-          contentType:
-            file.type
-        }
-      );
-
-
-  if (error) {
-
-    throw error;
+    throw new Error(
+      "Configure the Cloudinary cloud name and unsigned upload preset in script.js."
+    );
 
   }
 
 
-  const {
-    data
-  } =
-    supabase
-      .storage
-      .from("media")
-      .getPublicUrl(
-        path
-      );
+  const formData =
+    new FormData();
 
 
-  return (
-    data.publicUrl ||
-    ""
+  formData.append(
+    "file",
+    file
   );
+
+
+  formData.append(
+    "upload_preset",
+    CLOUDINARY_UPLOAD_PRESET
+  );
+
+
+  formData.append(
+    "folder",
+    `pluto/${currentUser.id}/${folder}`
+  );
+
+
+  if (file.size > 100 * 1024 * 1024) {
+    throw new Error(
+      "This file is over 100 MB. Compress it below 100 MB before uploading to Cloudinary."
+    );
+  }
+
+
+  const resourceType =
+    file.type.startsWith("video/")
+      ? "video"
+      : file.type.startsWith("image/")
+        ? "image"
+        : "auto";
+
+
+  const result = await new Promise((resolve, reject) => {
+    const request = new XMLHttpRequest();
+
+    request.open(
+      "POST",
+      `https://api.cloudinary.com/v1_1/${CLOUDINARY_CLOUD_NAME}/${resourceType}/upload`
+    );
+
+    request.upload.onprogress = event => {
+      if (event.lengthComputable) {
+        onProgress(Math.round((event.loaded / event.total) * 100));
+      }
+    };
+
+    request.onerror = () => {
+      reject(new Error("Network error while uploading to Cloudinary."));
+    };
+
+    request.onload = () => {
+      let payload;
+
+      try {
+        payload = JSON.parse(request.responseText);
+      } catch {
+        reject(new Error(
+          `Cloudinary returned an unreadable response (HTTP ${request.status}).`
+        ));
+        return;
+      }
+
+      if (request.status < 200 || request.status >= 300 || !payload.secure_url) {
+        reject(new Error(
+          payload.error?.message ||
+          `Cloudinary upload failed (HTTP ${request.status}). Check that the preset allows ${resourceType} uploads.`
+        ));
+        return;
+      }
+
+      resolve(payload);
+    };
+
+    request.send(formData);
+  });
+
+
+  return result.secure_url;
+
+}
+
+
+function getPlayableVideoURL(url) {
+
+  if (!url) {
+    return url;
+  }
+
+  try {
+    const videoURL = new URL(url);
+
+    if (
+      videoURL.hostname === "res.cloudinary.com" &&
+      videoURL.pathname.includes("/video/upload/") &&
+      !videoURL.pathname.includes("/video/upload/f_mp4")
+    ) {
+      videoURL.pathname = videoURL.pathname.replace(
+        "/video/upload/",
+        "/video/upload/f_mp4,vc_h264,ac_aac/"
+      );
+    }
+
+    return videoURL.toString();
+  } catch {
+    return url;
+  }
 
 }
 
@@ -3195,9 +3325,187 @@ event => {
    CREATE POST
 ========================================= */
 
+function clearShortTrimEditor() {
+
+  if (shortTrimObjectURL) {
+    URL.revokeObjectURL(shortTrimObjectURL);
+    shortTrimObjectURL = "";
+  }
+
+  if (trimmedShortPreviewURL) {
+    URL.revokeObjectURL(trimmedShortPreviewURL);
+    trimmedShortPreviewURL = "";
+  }
+
+  const preview = $("shortTrimPreview");
+
+  if (preview) {
+    preview.pause();
+    preview.removeAttribute("src");
+    preview.load();
+  }
+
+  const resultPreview = $("shortTrimResultPreview");
+
+  if (resultPreview) {
+    resultPreview.pause();
+    resultPreview.removeAttribute("src");
+    resultPreview.load();
+    resultPreview.classList.add("hidden");
+  }
+
+  $("shortTrimEditor")?.classList.add("hidden");
+  $("shortTrimStatus").textContent =
+    "Choose a clip up to 20 seconds.";
+  $("trimShortBtn").disabled = false;
+  $("trimShortBtn").textContent = "Trim Clip";
+  trimmedShortFile = null;
+  trimmedShortDuration = 0;
+
+}
+
+function setPostMode(mode) {
+
+  clearShortTrimEditor();
+  activePostMode = mode;
+
+  $("postModalTitle").textContent =
+    mode === "short"
+      ? "Create a Short"
+      : "Create Post";
+
+  $("postModeHint").textContent =
+    mode === "short"
+      ? "Choose a video that is 20 seconds or shorter."
+      : "";
+
+  $("postMedia").accept =
+    mode === "short"
+      ? "video/*"
+      : "image/*,video/*,audio/*";
+
+  $("postMedia").value = "";
+  $("uploadPreview").textContent = "";
+  $("postText").value = "";
+
+}
+
+
+function getVideoDuration(file) {
+
+  return new Promise((resolve, reject) => {
+
+    const video = document.createElement("video");
+    const objectURL = URL.createObjectURL(file);
+
+    video.preload = "metadata";
+    video.onloadedmetadata = () => {
+      const duration = video.duration;
+      URL.revokeObjectURL(objectURL);
+
+      if (Number.isFinite(duration)) {
+        resolve(duration);
+      } else {
+        reject(new Error("Could not read video duration."));
+      }
+    };
+
+    video.onerror = () => {
+      URL.revokeObjectURL(objectURL);
+      reject(new Error("Could not read this video file."));
+    };
+
+    video.src = objectURL;
+
+  });
+
+}
+
+
+async function trimVideoLocally(
+  sourceFile,
+  start,
+  end,
+  onStatus = () => {}
+) {
+
+  const ffmpeg = await loadLocalVideoTrimmer(onStatus);
+  const inputExtension =
+    sourceFile.name.match(/\.([a-z0-9]+)$/i)?.[1] ||
+    "video";
+  const inputName = `source-${Date.now()}.${inputExtension}`;
+  const outputName = `short-${Date.now()}.mp4`;
+  const progressHandler = ({ progress }) => {
+    if (Number.isFinite(progress)) {
+      onStatus(`Trimming locally ${Math.max(0, Math.min(99, Math.round(progress * 100)))}%...`);
+    }
+  };
+
+  ffmpeg.on("progress", progressHandler);
+
+  try {
+    onStatus("Loading video into this device...");
+    await ffmpeg.writeFile(
+      inputName,
+      new Uint8Array(await sourceFile.arrayBuffer())
+    );
+
+    onStatus("Trimming and converting to MP4 on this device...");
+    const resultCode = await ffmpeg.exec([
+      "-ss", start.toFixed(3),
+      "-i", inputName,
+      "-t", (end - start).toFixed(3),
+      "-map", "0:v:0",
+      "-map", "0:a:0?",
+      "-c:v", "libx264",
+      "-preset", "ultrafast",
+      "-crf", "26",
+      "-pix_fmt", "yuv420p",
+      "-c:a", "aac",
+      "-b:a", "128k",
+      "-movflags", "+faststart",
+      outputName
+    ]);
+
+    if (resultCode !== 0) {
+      throw new Error("FFmpeg could not convert this video. Try another file format.");
+    }
+
+    const outputData = await ffmpeg.readFile(outputName);
+
+    if (!(outputData instanceof Uint8Array) || !outputData.length) {
+      throw new Error("The trimmed clip is empty. Try another start/end range.");
+    }
+
+    const baseName = sourceFile.name.replace(/\.[^.]+$/, "");
+
+    onStatus("Trim ready. Only this MP4 will be uploaded.");
+    return new File(
+      [outputData],
+      `${baseName}-trimmed.mp4`,
+      { type: "video/mp4" }
+    );
+  } finally {
+    ffmpeg.off("progress", progressHandler);
+    await ffmpeg.deleteFile(inputName).catch(() => {});
+    await ffmpeg.deleteFile(outputName).catch(() => {});
+  }
+
+}
+
+
+function openShortUpload() {
+
+  setPostMode("short");
+  openModal("postModal");
+  $("postMedia").click();
+
+}
+
 $("openCreatePost").onclick =
 () => {
 
+  setPostMode("post");
   openModal(
     "postModal"
   );
@@ -3208,6 +3516,7 @@ $("openCreatePost").onclick =
 $("profileCreatePost").onclick =
 () => {
 
+  setPostMode("post");
   openModal(
     "postModal"
   );
@@ -3224,6 +3533,7 @@ document
     button.onclick =
     () => {
 
+      setPostMode("post");
       openModal(
         "postModal"
       );
@@ -3238,17 +3548,126 @@ document
 
 
 $("postMedia").onchange =
-event => {
+async event => {
 
   const file =
     event.target.files[0];
 
+  clearShortTrimEditor();
 
   $("uploadPreview")
     .textContent =
       file
         ? file.name
         : "";
+
+  if (!file || activePostMode !== "short") {
+    return;
+  }
+
+  if (!file.type.startsWith("video/")) {
+    event.target.value = "";
+    $("uploadPreview").textContent = "Shorts must be video files.";
+    return;
+  }
+
+  try {
+    const duration = await getVideoDuration(file);
+
+    if (duration > 20) {
+      shortTrimObjectURL = URL.createObjectURL(file);
+      $("shortTrimPreview").src = shortTrimObjectURL;
+      $("shortTrimStart").max = String(duration);
+      $("shortTrimStart").value = "0";
+      $("shortTrimEnd").max = String(duration);
+      $("shortTrimEnd").value = "20";
+      $("shortTrimEditor").classList.remove("hidden");
+      $("shortTrimStatus").textContent =
+        `Choose a start and end time (up to 20 seconds) from this ${duration.toFixed(1)} second video.`;
+      $("uploadPreview").textContent = file.name;
+      return;
+    }
+
+    $("uploadPreview").textContent =
+      `${file.name} · ${duration.toFixed(1)} seconds`;
+  } catch (error) {
+    event.target.value = "";
+    $("uploadPreview").textContent = error.message;
+  }
+
+};
+
+
+$("trimShortBtn").onclick =
+async () => {
+
+  const sourceFile = $("postMedia").files[0];
+
+  if (!sourceFile) {
+    return;
+  }
+
+  const start = Number($("shortTrimStart").value);
+  const end = Number($("shortTrimEnd").value);
+  const sourceDuration = Number($("shortTrimEnd").max);
+
+  if (
+    !Number.isFinite(start) ||
+    !Number.isFinite(end) ||
+    start < 0 ||
+    end > sourceDuration ||
+    end <= start ||
+    end - start > 20
+  ) {
+    $("shortTrimStatus").textContent =
+      "Choose a valid range no longer than 20 seconds.";
+    return;
+  }
+
+  const button = $("trimShortBtn");
+
+  try {
+    if (trimmedShortPreviewURL) {
+      URL.revokeObjectURL(trimmedShortPreviewURL);
+      trimmedShortPreviewURL = "";
+    }
+
+    $("shortTrimResultPreview").pause();
+    $("shortTrimResultPreview").removeAttribute("src");
+    $("shortTrimResultPreview").load();
+    $("shortTrimResultPreview").classList.add("hidden");
+    trimmedShortFile = null;
+    trimmedShortDuration = 0;
+    button.disabled = true;
+    button.textContent = "Trimming...";
+    $("shortTrimStatus").textContent =
+      "Preparing the local video trimmer...";
+
+    trimmedShortFile = await trimVideoLocally(
+      sourceFile,
+      start,
+      end,
+      status => {
+        $("shortTrimStatus").textContent = status;
+      }
+    );
+    trimmedShortDuration = end - start;
+    trimmedShortPreviewURL =
+      URL.createObjectURL(trimmedShortFile);
+    $("shortTrimResultPreview").src = trimmedShortPreviewURL;
+    $("shortTrimResultPreview").classList.remove("hidden");
+
+    $("shortTrimStatus").textContent =
+      `Clip ready · ${trimmedShortDuration.toFixed(1)} seconds. Only this trimmed MP4 will upload.`;
+    $("uploadPreview").textContent = trimmedShortFile.name;
+  } catch (error) {
+    trimmedShortFile = null;
+    trimmedShortDuration = 0;
+    $("shortTrimStatus").textContent = error.message;
+  } finally {
+    button.disabled = false;
+    button.textContent = "Trim Clip";
+  }
 
 };
 
@@ -3269,18 +3688,26 @@ async () => {
       .trim();
 
 
-  const file =
+  const originalFile =
     $("postMedia")
       .files[0];
 
 
+  const file =
+    activePostMode === "short" && trimmedShortFile
+      ? trimmedShortFile
+      : originalFile;
+
+
   if (
-    !text &&
-    !file
+    (!text && !file) ||
+    (activePostMode === "short" && !file)
   ) {
 
     alert(
-      "Write something or select media."
+      activePostMode === "short"
+        ? "Select a video for your Short."
+        : "Write something or select media."
     );
 
     return;
@@ -3312,10 +3739,34 @@ async () => {
 
     if (file) {
 
+      if (activePostMode === "short") {
+
+        if (!file.type.startsWith("video/")) {
+          throw new Error("Shorts must be video files.");
+        }
+
+        const duration = trimmedShortFile
+          ? trimmedShortDuration
+          : await getVideoDuration(file);
+
+        if (duration > 20) {
+          throw new Error("Trim this video to 20 seconds or less before publishing.");
+        }
+
+      }
+
       mediaURL =
         await uploadFile(
           file,
-          "posts"
+          activePostMode === "short"
+            ? "shorts"
+            : "posts",
+          progress => {
+            button.textContent =
+              progress >= 100
+                ? "Saving post..."
+                : `Uploading ${progress}%`;
+          }
         );
 
 
@@ -3337,7 +3788,9 @@ async () => {
       ) {
 
         mediaType =
-          "video";
+          activePostMode === "short"
+            ? "short"
+            : "video";
 
       }
 
@@ -3395,6 +3848,8 @@ async () => {
     $("uploadPreview")
       .textContent =
         "";
+
+    setPostMode("post");
 
 
     closeModal(
@@ -3537,6 +3992,10 @@ async function loadFeed() {
   }
 
 
+  const loadGeneration =
+    ++feedLoadGeneration;
+
+
   const container =
     $("postsContainer");
 
@@ -3564,6 +4023,16 @@ async function loadFeed() {
         .limit(50);
 
 
+    if (
+      loadGeneration !==
+      feedLoadGeneration
+    ) {
+
+      return;
+
+    }
+
+
     if (error) {
 
       throw error;
@@ -3581,7 +4050,8 @@ async function loadFeed() {
         `<div class="empty-state">No posts yet.</div>`;
 
 
-      renderVideos([]);
+      renderShortStories([]);
+      renderShortVideoCards();
 
       return;
 
@@ -3601,9 +4071,73 @@ async function loadFeed() {
       );
 
 
+    if (loadGeneration !== feedLoadGeneration) {
+      return;
+    }
+
+
+    const {
+      data: shortPosts,
+      error: shortsError
+    } = await supabase
+      .from("posts")
+      .select("*")
+      .eq("media_type", "short")
+      .order("created_at", { ascending: false })
+      .limit(20);
+
+    if (shortsError) {
+      throw shortsError;
+    }
+
+    const shortUserIds = [...new Set(
+      (shortPosts || []).map(post => post.user_id)
+    )];
+
+    let shortProfiles = [];
+
+    if (shortUserIds.length) {
+      const { data, error: profilesError } = await supabase
+        .from("profiles")
+        .select("id,name,username,avatar_url,bio")
+        .in("id", shortUserIds);
+
+      if (profilesError) {
+        throw profilesError;
+      }
+
+      shortProfiles = data || [];
+    }
+
+    const shortProfilesById = new Map(
+      shortProfiles.map(profile => [profile.id, profile])
+    );
+
+    const enrichedShorts = (shortPosts || []).map(post => ({
+      ...post,
+      profiles: shortProfilesById.get(post.user_id) || {}
+    }));
+
+    const shortsWithEngagement =
+      await enrichShortEngagement(enrichedShorts);
+
+
+    if (loadGeneration !== feedLoadGeneration) {
+      return;
+    }
+
+
+    renderShortStories(shortsWithEngagement);
+    renderShortVideoCards();
+
+
+    const postElements =
+      document.createDocumentFragment();
+
+
     enriched.forEach(post => {
 
-      container.appendChild(
+      postElements.appendChild(
         createPostElement(
           post
         )
@@ -3612,16 +4146,22 @@ async function loadFeed() {
     });
 
 
+    container.replaceChildren(
+      postElements
+    );
+
+
     filterFeed();
 
-
-    renderVideos(
-      enriched
-    );
 
   }
 
   catch (error) {
+
+    if (loadGeneration !== feedLoadGeneration) {
+      return;
+    }
+
 
     console.error(
       "FEED ERROR:",
@@ -3640,6 +4180,94 @@ async function loadFeed() {
 /* =========================================
    CREATE POST ELEMENT
 ========================================= */
+
+async function deletePost(
+  post,
+  button
+) {
+
+  if (
+    !currentUser ||
+    post.user_id !== currentUser.id
+  ) {
+
+    return;
+
+  }
+
+
+  if (
+    !window.confirm(
+      "Delete this post? This cannot be undone."
+    )
+  ) {
+
+    return;
+
+  }
+
+
+  button.disabled =
+    true;
+
+
+  try {
+
+    const {
+      error
+    } =
+      await supabase
+        .from("posts")
+        .delete()
+        .eq(
+          "id",
+          post.id
+        )
+        .eq(
+          "user_id",
+          currentUser.id
+        );
+
+
+    if (error) {
+
+      throw error;
+
+    }
+
+
+    if (post.media_url) {
+
+      await deleteOldMedia(
+        post.media_url
+      );
+
+    }
+
+
+    await refreshPostsUI();
+
+  }
+
+  catch (error) {
+
+    console.error(
+      "POST DELETE ERROR:",
+      error
+    );
+
+
+    button.disabled =
+      false;
+
+
+    alert(
+      `Could not delete post: ${error.message}`
+    );
+
+  }
+
+}
 
 function createPostElement(post) {
 
@@ -3690,7 +4318,18 @@ function createPostElement(post) {
   ) {
 
     media =
-      `<video class="post-media" src="${escapeHTML(post.media_url)}" controls></video>`;
+      `<video class="post-media" src="${escapeHTML(getPlayableVideoURL(post.media_url))}" controls playsinline preload="metadata"></video>`;
+
+  }
+
+
+  if (
+    post.media_type === "short" &&
+    post.media_url
+  ) {
+
+    media =
+      `<video class="post-media" src="${escapeHTML(getPlayableVideoURL(post.media_url))}" controls playsinline preload="metadata"></video>`;
 
   }
 
@@ -3744,6 +4383,15 @@ function createPostElement(post) {
         </span>
 
       </button>
+
+
+      ${
+        post.user_id === currentUser?.id
+
+          ? `<button class="post-delete-btn" type="button" title="Delete post" aria-label="Delete post"><i class="fa-solid fa-trash"></i></button>`
+
+          : ""
+      }
 
     </div>
 
@@ -3819,6 +4467,27 @@ function createPostElement(post) {
       };
 
     });
+
+
+  const deleteButton =
+    article.querySelector(
+      ".post-delete-btn"
+    );
+
+
+  if (deleteButton) {
+
+    deleteButton.onclick =
+    () => {
+
+      deletePost(
+        post,
+        deleteButton
+      );
+
+    };
+
+  }
 
 
   article
@@ -4214,6 +4883,8 @@ async () => {
 
 
   await loadComments();
+
+  await refreshShortViewerEngagement(activePostId);
 
   await refreshPostsUI();
 
@@ -6113,30 +6784,72 @@ async function loadConversations() {
       messages?.[0];
 
 
-    const button =
+    const row =
       document.createElement(
-        "button"
+        "div"
       );
 
 
-    button.className =
+    row.className =
       "conversation-row";
 
 
-    button.innerHTML = `
+    const avatar =
+      profile.avatar_url
 
-      <strong>
-        ${escapeHTML(profile.name || "PLUTO User")}
-      </strong>
+        ? `<img src="${escapeHTML(profile.avatar_url)}" alt="">`
 
-      <span>
-        ${escapeHTML(lastMessage?.content || "Open conversation")}
-      </span>
+        : `<i class="fa-solid fa-user"></i>`;
+
+
+    row.innerHTML = `
+
+      <button
+        class="conversation-profile"
+        type="button"
+        aria-label="View ${escapeHTML(profile.name || "PLUTO User")}'s profile"
+      >
+        <span class="conversation-avatar">
+          ${avatar}
+        </span>
+      </button>
+
+      <button
+        class="conversation-preview"
+        type="button"
+        aria-label="Open conversation with ${escapeHTML(profile.name || "PLUTO User")}: ${escapeHTML(lastMessage?.content || "No messages yet") }"
+      >
+        <span class="conversation-name">
+          ${escapeHTML(profile.name || "PLUTO User")}
+        </span>
+
+        <span class="conversation-message">
+          ${escapeHTML(lastMessage?.content || "Open conversation")}
+        </span>
+      </button>
 
     `;
 
 
-    button.onclick =
+    row
+      .querySelector(
+        ".conversation-profile"
+      )
+      .onclick =
+    () => {
+
+      openUserProfile(
+        profile.id
+      );
+
+    };
+
+
+    row
+      .querySelector(
+        ".conversation-preview"
+      )
+      .onclick =
     () => {
 
       openChat(
@@ -6147,9 +6860,7 @@ async function loadConversations() {
     };
 
 
-    container.appendChild(
-      button
-    );
+    container.appendChild(row);
 
   }
 
@@ -6170,55 +6881,671 @@ async function loadConversations() {
    VIDEO
 ========================================= */
 
-function renderVideos(posts) {
+async function enrichShortEngagement(posts) {
 
-  const container =
-    $("videoContainer");
-
-
-  if (!container) {
-
-    return;
-
+  if (!posts.length) {
+    return posts;
   }
 
+  const postIds = posts.map(post => post.id);
+  const [likesResult, commentsResult] = await Promise.all([
+    supabase
+      .from("likes")
+      .select("post_id,user_id")
+      .in("post_id", postIds),
+    supabase
+      .from("comments")
+      .select("post_id")
+      .in("post_id", postIds)
+  ]);
 
-  const videos =
-    posts.filter(
-      post =>
-        post.media_type ===
-        "video"
+  if (likesResult.error) {
+    console.error("SHORT LIKES LOAD ERROR:", likesResult.error);
+  }
+
+  if (commentsResult.error) {
+    console.error("SHORT COMMENTS LOAD ERROR:", commentsResult.error);
+  }
+
+  const likesByPost = new Map();
+  const commentsByPost = new Map();
+
+  (likesResult.data || []).forEach(like => {
+    const likes = likesByPost.get(like.post_id) || [];
+    likes.push(like);
+    likesByPost.set(like.post_id, likes);
+  });
+
+  (commentsResult.data || []).forEach(comment => {
+    commentsByPost.set(
+      comment.post_id,
+      (commentsByPost.get(comment.post_id) || 0) + 1
+    );
+  });
+
+  return posts.map(post => ({
+    ...post,
+    likes: likesByPost.get(post.id) || [],
+    comments_count: commentsByPost.get(post.id) || 0
+  }));
+
+}
+
+
+function openShortViewer(posts, selectedIndex = 0) {
+
+  shortViewerPosts = Array.isArray(posts) ? posts : [posts];
+
+  if (!shortViewerPosts.length) {
+    return;
+  }
+
+  activeShortIndex = Math.max(
+    0,
+    Math.min(selectedIndex, shortViewerPosts.length - 1)
+  );
+
+  const feed = $("shortViewerFeed");
+
+  feed.innerHTML = shortViewerPosts.map((post, index) => {
+    const profile = post.profiles || {};
+    const isLiked = post.likes?.some(
+      like => like.user_id === currentUser?.id
+    );
+    const avatar = profile.avatar_url
+      ? `<img src="${escapeHTML(profile.avatar_url)}" alt="">`
+      : `<i class="fa-solid fa-user"></i>`;
+
+    return `
+      <article class="short-slide" data-short-index="${index}">
+        <video class="short-slide-video" src="${escapeHTML(getPlayableVideoURL(post.media_url))}" playsinline loop preload="metadata"></video>
+        <div class="short-slide-shade"></div>
+        <button class="short-slide-play" type="button" data-short-action="play" aria-label="Play or pause video">
+          <i class="fa-solid fa-pause"></i>
+        </button>
+        <div class="short-slide-actions">
+          <button type="button" data-short-action="like" aria-label="Like video">
+            <i class="${isLiked ? "fa-solid" : "fa-regular"} fa-heart"></i>
+            <span>${post.likes?.length || 0}</span>
+          </button>
+          <button type="button" data-short-action="comment" aria-label="Comment on video">
+            <i class="fa-regular fa-comment"></i>
+            <span>${post.comments_count || 0}</span>
+          </button>
+          <button type="button" data-short-action="share" aria-label="Share video">
+            <i class="fa-solid fa-share"></i>
+            <span>Share</span>
+          </button>
+          <button type="button" data-short-action="mute" aria-label="Mute video">
+            <i class="fa-solid fa-volume-high"></i>
+            <span>Sound</span>
+          </button>
+        </div>
+        <div class="short-slide-creator">
+          <span class="short-slide-avatar">${avatar}</span>
+          <div class="short-slide-creator-copy">
+            <strong>${escapeHTML(profile.name || profile.username || "PLUTO User")}</strong>
+            <span>@${escapeHTML(profile.username || "user")}</span>
+          </div>
+        </div>
+        ${profile.bio
+          ? `<p class="short-slide-bio">${escapeHTML(profile.bio)}</p>`
+          : ""}
+        ${post.content
+          ? `<p class="short-slide-caption">${escapeHTML(post.content)}</p>`
+          : ""}
+      </article>
+    `;
+  }).join("");
+
+  feed.scrollTop = 0;
+  openModal("shortViewerModal");
+  feed.scrollTop = activeShortIndex * feed.clientHeight;
+
+  feed.querySelectorAll(".short-slide").forEach(slide => {
+    const index = Number(slide.dataset.shortIndex);
+    const post = shortViewerPosts[index];
+    const video = slide.querySelector("video");
+
+    slide.querySelector('[data-short-action="play"]').onclick = event => {
+      event.stopPropagation();
+      const playButton = event.currentTarget;
+
+      if (video.paused) {
+        video.play().catch(() => {});
+        playButton.innerHTML = `<i class="fa-solid fa-pause"></i>`;
+      } else {
+        video.pause();
+        playButton.innerHTML = `<i class="fa-solid fa-play"></i>`;
+      }
+    };
+
+    slide.querySelector('[data-short-action="like"]').onclick = async event => {
+      event.stopPropagation();
+      await toggleLike(post.id);
+      await refreshShortViewerEngagement(post.id);
+    };
+
+    slide.querySelector('[data-short-action="comment"]').onclick = event => {
+      event.stopPropagation();
+      video.pause();
+      openComments(post.id);
+    };
+
+    slide.querySelector('[data-short-action="share"]').onclick = event => {
+      event.stopPropagation();
+      sharePost(post.id);
+    };
+
+    slide.querySelector('[data-short-action="mute"]').onclick = event => {
+      event.stopPropagation();
+      video.muted = !video.muted;
+      event.currentTarget.setAttribute(
+        "aria-label",
+        video.muted ? "Unmute video" : "Mute video"
+      );
+      event.currentTarget.innerHTML = video.muted
+        ? `<i class="fa-solid fa-volume-xmark"></i><span>Sound</span>`
+        : `<i class="fa-solid fa-volume-high"></i><span>Sound</span>`;
+    };
+
+    video.onclick = () => {
+      if (video.paused) {
+        video.play().catch(() => {});
+      } else {
+        video.pause();
+      }
+    };
+
+    video.onplay = () => {
+      slide.classList.remove("short-is-paused");
+      slide.querySelector('[data-short-action="play"]').innerHTML =
+        `<i class="fa-solid fa-pause"></i>`;
+    };
+
+    video.onpause = () => {
+      slide.classList.add("short-is-paused");
+      slide.querySelector('[data-short-action="play"]').innerHTML =
+        `<i class="fa-solid fa-play"></i>`;
+    };
+  });
+
+  shortViewerObserver?.disconnect();
+  shortViewerObserver = new IntersectionObserver(entries => {
+    entries.forEach(entry => {
+      if (!entry.isIntersecting || entry.intersectionRatio < 0.65) {
+        return;
+      }
+
+      activeShortIndex = Number(entry.target.dataset.shortIndex);
+      feed.querySelectorAll("video").forEach(video => {
+        if (video === entry.target.querySelector("video")) {
+          video.play().catch(() => {});
+        } else {
+          video.pause();
+        }
+      });
+    });
+  }, {
+    root: feed,
+    threshold: [0.65, 0.9]
+  });
+
+  feed.querySelectorAll(".short-slide").forEach(slide => {
+    shortViewerObserver.observe(slide);
+  });
+
+}
+
+
+async function refreshShortViewerEngagement(postId) {
+
+  const post = shortViewerPosts.find(item => item.id === postId);
+
+  if (!post) {
+    return;
+  }
+
+  const [likesResult, commentsResult] = await Promise.all([
+    supabase
+      .from("likes")
+      .select("user_id")
+      .eq("post_id", postId),
+    supabase
+      .from("comments")
+      .select("id")
+      .eq("post_id", postId)
+  ]);
+
+  post.likes = likesResult.data || [];
+  post.comments_count = commentsResult.data?.length || 0;
+
+  const slide = $("shortViewerFeed")
+    .querySelector(`[data-short-index="${shortViewerPosts.indexOf(post)}"]`);
+
+  if (slide) {
+    const likeButton = slide.querySelector('[data-short-action="like"]');
+    const commentButton = slide.querySelector('[data-short-action="comment"]');
+    const isLiked = post.likes.some(
+      like => like.user_id === currentUser?.id
     );
 
+    likeButton.innerHTML = `
+      <i class="${isLiked ? "fa-solid" : "fa-regular"} fa-heart"></i>
+      <span>${post.likes.length}</span>
+    `;
+    commentButton.innerHTML = `
+      <i class="fa-regular fa-comment"></i>
+      <span>${post.comments_count}</span>
+    `;
+  }
+
+}
+
+
+function renderShortStories(shorts) {
+
+  const container = $("shortStories");
+
+  if (!container) {
+    return;
+  }
+
+  container.innerHTML = "";
+
+  const addTile = document.createElement("button");
+  addTile.className = "short-story-tile short-story-add";
+  addTile.type = "button";
+  addTile.innerHTML = `
+    <span class="short-story-add-icon"><i class="fa-solid fa-plus"></i></span>
+    <span class="short-story-name">Add a Short</span>
+  `;
+  addTile.onclick = openShortUpload;
+  container.appendChild(addTile);
+
+  shorts.forEach((post, index) => {
+    const profile = post.profiles || {};
+    const tile = document.createElement("button");
+    tile.className = "short-story-tile";
+    tile.type = "button";
+    tile.innerHTML = `
+      <video src="${escapeHTML(getPlayableVideoURL(post.media_url))}" autoplay muted loop playsinline preload="metadata"></video>
+      <span class="short-story-avatar">
+        ${profile.avatar_url
+          ? `<img src="${escapeHTML(profile.avatar_url)}" alt="">`
+          : `<i class="fa-solid fa-user"></i>`}
+      </span>
+      <span class="short-story-name">${escapeHTML(profile.username || "user")}</span>
+    `;
+    tile.onclick = () => openHomeStoryViewer(shorts, index);
+    container.appendChild(tile);
+  });
+
+}
+
+
+function openHomeStoryViewer(posts, selectedIndex = 0) {
+
+  homeStoryPosts = posts;
+  activeHomeStoryIndex = Math.max(
+    0,
+    Math.min(selectedIndex, homeStoryPosts.length - 1)
+  );
+
+  if (!homeStoryPosts.length) {
+    return;
+  }
+
+  openModal("homeStoryViewerModal");
+  showHomeStory(activeHomeStoryIndex);
+
+}
+
+
+function showHomeStory(index) {
+
+  if (!homeStoryPosts.length) {
+    return;
+  }
+
+  activeHomeStoryIndex =
+    (index + homeStoryPosts.length) % homeStoryPosts.length;
+
+  const post = homeStoryPosts[activeHomeStoryIndex];
+  const profile = post.profiles || {};
+  const video = $("homeStoryVideo");
+
+  video.pause();
+  video.src = getPlayableVideoURL(post.media_url);
+  video.muted = false;
+  video.currentTime = 0;
+  video.onended = () => stepHomeStory(1);
+  video.ontimeupdate = () => {
+    const progress = $("homeStoryProgress")
+      .children[activeHomeStoryIndex]
+      ?.querySelector("i");
+
+    if (progress && Number.isFinite(video.duration) && video.duration > 0) {
+      progress.style.width =
+        `${Math.min(100, (video.currentTime / video.duration) * 100)}%`;
+    }
+  };
+  video.play().catch(() => {});
+
+  $("homeStoryAvatar").innerHTML = profile.avatar_url
+    ? `<img src="${escapeHTML(profile.avatar_url)}" alt="">`
+    : `<i class="fa-solid fa-user"></i>`;
+  $("homeStoryName").textContent =
+    profile.name || profile.username || "PLUTO User";
+  $("homeStoryUsername").textContent =
+    `@${profile.username || "user"}`;
+  $("homeStoryBio").textContent = profile.bio || "";
+  $("homeStoryBio").classList.toggle("hidden", !profile.bio);
+  $("homeStoryCaption").textContent = post.content || "";
+  $("homeStoryCaption").classList.toggle("hidden", !post.content);
+
+  $("homeStoryProgress").innerHTML = homeStoryPosts
+    .map((_, itemIndex) => `
+      <span class="home-story-progress-track">
+        <i class="${itemIndex < activeHomeStoryIndex ? "complete" : itemIndex === activeHomeStoryIndex ? "current" : ""}"></i>
+      </span>
+    `)
+    .join("");
+
+}
+
+
+function stepHomeStory(direction) {
+
+  if (!homeStoryPosts.length) {
+    return;
+  }
+
+  showHomeStory(activeHomeStoryIndex + direction);
+
+}
+
+
+$("homeStoryPrev").onclick =
+  () => stepHomeStory(-1);
+
+
+$("homeStoryNext").onclick =
+  () => stepHomeStory(1);
+
+
+$("homeStoryTapPrev").onclick =
+  () => stepHomeStory(-1);
+
+
+$("homeStoryTapNext").onclick =
+  () => stepHomeStory(1);
+
+
+$("homeStoryViewer").addEventListener("pointerdown", event => {
+  homeStoryTouchStartX = event.clientX;
+});
+
+
+$("homeStoryViewer").addEventListener("pointerup", event => {
+  if (homeStoryTouchStartX === null) {
+    return;
+  }
+
+  const distance = event.clientX - homeStoryTouchStartX;
+  homeStoryTouchStartX = null;
+
+  if (Math.abs(distance) > 55) {
+    stepHomeStory(distance < 0 ? 1 : -1);
+  }
+});
+
+
+function getRemoteVideoDuration(url) {
+
+  return new Promise(resolve => {
+    const video = document.createElement("video");
+    let settled = false;
+    const timeout = setTimeout(() => finish(null), 10000);
+
+    const finish = duration => {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
+      clearTimeout(timeout);
+      video.removeAttribute("src");
+      video.load();
+      resolve(duration);
+    };
+
+    video.preload = "metadata";
+    video.onloadedmetadata = () => {
+      finish(Number.isFinite(video.duration) ? video.duration : null);
+    };
+    video.onerror = () => finish(null);
+    video.src = getPlayableVideoURL(url);
+    video.load();
+  });
+
+}
+
+
+async function renderShortVideoCards() {
+
+  const container = $("videoFeatureCards");
+  const status = $("videoShortStatus");
+
+  if (!container || !status) {
+    return;
+  }
+
+  container
+    .querySelectorAll(".video-short-card")
+    .forEach(card => card.remove());
+
+  status.classList.remove("hidden");
+  status.textContent = "Loading user videos...";
+
+  try {
+    const { data: videos, error } = await supabase
+      .from("posts")
+      .select("id,user_id,media_url,media_type,created_at")
+      .eq("media_type", "video")
+      .not("media_url", "is", null)
+      .order("created_at", { ascending: false })
+      .limit(50);
+
+    if (error) {
+      throw error;
+    }
+
+    const userIds = [...new Set((videos || []).map(post => post.user_id))];
+    let profiles = [];
+
+    if (userIds.length) {
+      const { data, error: profilesError } = await supabase
+        .from("profiles")
+        .select("id,name,username,avatar_url,bio")
+        .in("id", userIds);
+
+      if (profilesError) {
+        throw profilesError;
+      }
+
+      profiles = data || [];
+    }
+
+    const profilesById = new Map(
+      profiles.map(profile => [profile.id, profile])
+    );
+
+    const userVideos = (videos || []).map(post => ({
+      ...post,
+      profiles: profilesById.get(post.user_id) || {}
+    }));
+
+    status.textContent = userVideos.length
+      ? "Checking video lengths..."
+      : "No user videos yet.";
+
+    const durations = await Promise.all(
+      userVideos.map(post => getRemoteVideoDuration(post.media_url))
+    );
+
+    const eligibleVideos = userVideos.filter((post, index) =>
+      durations[index] !== null &&
+      durations[index] < 30
+    );
+
+    const shortVideos = await enrichShortEngagement(eligibleVideos);
+
+    status.textContent =
+      shortVideos.length
+        ? ""
+        : "No videos under 30 seconds yet.";
+    status.classList.toggle(
+      "hidden",
+      shortVideos.length > 0
+    );
+
+    shortVideos.forEach((post, index) => {
+      const profile = post.profiles || {};
+      const card = document.createElement("button");
+
+      card.className = "video-short-card";
+      card.type = "button";
+      card.innerHTML = `
+        <video src="${escapeHTML(getPlayableVideoURL(post.media_url))}" muted playsinline preload="metadata"></video>
+        <span class="video-short-label">Short video</span>
+        <span class="video-short-user">@${escapeHTML(profile.username || "user")}</span>
+      `;
+      const preview = card.querySelector("video");
+      preview.onloadedmetadata = () => {
+        if (preview.duration > 0) {
+          preview.currentTime = Math.min(0.1, preview.duration / 2);
+        }
+      };
+      card.onclick = () => openShortViewer(shortVideos, index);
+      container.insertBefore(card, status);
+    });
+  } catch (error) {
+    console.error("VIDEO SHORTS LOAD ERROR:", error);
+    status.classList.remove("hidden");
+    status.textContent = "Could not load user videos.";
+  }
+
+}
+
+async function loadVideoLibrary() {
+
+  if (!currentUser) {
+    return;
+  }
+
+  const container = $("videoContainer");
 
   container.innerHTML =
-    "";
+    `<div class="empty-state">Loading videos...</div>`;
 
+  try {
+    const videos = [];
+    const pageSize = 500;
 
-  videos.forEach(post => {
+    for (let offset = 0; ; offset += pageSize) {
+      const { data, error } = await supabase
+        .from("posts")
+        .select("id,user_id,content,media_url,created_at")
+        .eq("media_type", "video")
+        .not("media_url", "is", null)
+        .order("created_at", { ascending: false })
+        .range(offset, offset + pageSize - 1);
 
-    const video =
-      document.createElement(
-        "video"
-      );
+      if (error) {
+        throw error;
+      }
 
+      videos.push(...(data || []));
 
-    video.className =
-      "stream-video";
+      if (!data || data.length < pageSize) {
+        break;
+      }
+    }
 
+    const userIds = [...new Set(videos.map(post => post.user_id))];
+    const profiles = [];
+    const profilePageSize = 200;
 
-    video.src =
-      post.media_url;
+    for (let offset = 0; offset < userIds.length; offset += profilePageSize) {
+      const ids = userIds.slice(offset, offset + profilePageSize);
+      const { data, error } = await supabase
+        .from("profiles")
+        .select("id,name,username,avatar_url")
+        .in("id", ids);
 
+      if (error) {
+        throw error;
+      }
 
-    video.controls =
-      true;
+      profiles.push(...(data || []));
+    }
 
-
-    container.appendChild(
-      video
+    const profilesById = new Map(
+      profiles.map(profile => [profile.id, profile])
     );
 
+    videoLibraryPosts = videos.map(post => ({
+      ...post,
+      profiles: profilesById.get(post.user_id) || {}
+    }));
+
+    renderVideos();
+  } catch (error) {
+    console.error("VIDEO LIBRARY ERROR:", error);
+    container.innerHTML =
+      `<div class="empty-state">Could not load videos: ${escapeHTML(error.message)}</div>`;
+  }
+
+}
+
+
+function renderVideos() {
+
+  const container = $("videoContainer");
+  const videos = videoLibraryPosts;
+
+  container.innerHTML = "";
+
+  if (!videos.length) {
+    container.innerHTML = `<div class="empty-state">No videos yet.</div>`;
+    return;
+  }
+
+  videos.forEach(post => {
+    const profile = post.profiles || {};
+    const row = document.createElement("article");
+    const avatar = profile.avatar_url
+      ? `<img src="${escapeHTML(profile.avatar_url)}" alt="">`
+      : `<i class="fa-solid fa-user"></i>`;
+
+    row.className = "video-result-card";
+    row.innerHTML = `
+      <div class="video-result-player-wrap">
+        <video class="video-result-player" src="${escapeHTML(getPlayableVideoURL(post.media_url))}" controls playsinline preload="metadata"></video>
+      </div>
+      <div class="video-result-details">
+        <div class="video-result-uploader">
+          <span class="video-result-avatar">${avatar}</span>
+          <div>
+            <strong>${escapeHTML(profile.name || "PLUTO User")}</strong>
+            <span>@${escapeHTML(profile.username || "user")} · ${escapeHTML(formatTime(post.created_at))}</span>
+          </div>
+        </div>
+        <p class="video-result-description">${escapeHTML(post.content || "No description")}</p>
+      </div>
+    `;
+    container.appendChild(row);
   });
 
 }
@@ -6760,6 +8087,20 @@ $("forgotPasswordBtn").onclick =
 };
 
 
+$("resetPasswordSettingBtn").onclick =
+() => {
+
+  $("resetEmail").value =
+    "";
+
+
+  openModal(
+    "forgotPasswordModal"
+  );
+
+};
+
+
 $("sendResetBtn").onclick =
 async () => {
 
@@ -7100,3 +8441,120 @@ if (openHianimeBtn) {
 if (closeHianimeBtn) {
   closeHianimeBtn.addEventListener("click", closeHianime);
 }
+
+
+async function loadLocalVideoTrimmer(onStatus = () => {}) {
+
+  if (localVideoTrimmer?.loaded) {
+    return localVideoTrimmer;
+  }
+
+  if (!localVideoTrimmerPromise) {
+    localVideoTrimmerPromise = (async () => {
+      onStatus("Loading local video trimmer (first use downloads about 30 MB)...");
+
+      const ffmpegBase =
+        "https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.10";
+      const coreBase =
+        "https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/esm";
+
+      const [ffmpegModule, utilModule] = await Promise.all([
+        import(`${ffmpegBase}/dist/esm/index.js`),
+        import("https://cdn.jsdelivr.net/npm/@ffmpeg/util@0.12.1/dist/esm/index.js")
+      ]);
+
+      const ffmpeg = new ffmpegModule.FFmpeg();
+      const workerModuleURL = URL.createObjectURL(new Blob([
+        `import "${ffmpegBase}/dist/esm/worker.js";`
+      ], { type: "text/javascript" }));
+
+      try {
+        const [coreURL, wasmURL] = await Promise.all([
+          utilModule.toBlobURL(`${coreBase}/ffmpeg-core.js`, "text/javascript"),
+          utilModule.toBlobURL(`${coreBase}/ffmpeg-core.wasm`, "application/wasm")
+        ]);
+
+        await ffmpeg.load({
+          classWorkerURL: workerModuleURL,
+          coreURL,
+          wasmURL
+        });
+
+        localVideoTrimmer = ffmpeg;
+        return ffmpeg;
+      } catch (error) {
+        URL.revokeObjectURL(workerModuleURL);
+        throw error;
+      }
+    })().catch(error => {
+      localVideoTrimmerPromise = null;
+      throw new Error(
+        `Could not load the local video trimmer: ${error.message}`
+      );
+    });
+  }
+
+  return localVideoTrimmerPromise;
+
+}
+
+
+function scrollShortViewer(direction) {
+
+  const feed = $("shortViewerFeed");
+
+  if (!feed || !shortViewerPosts.length) {
+    return;
+  }
+
+  const nextIndex = Math.max(
+    0,
+    Math.min(activeShortIndex + direction, shortViewerPosts.length - 1)
+  );
+
+  feed.scrollTo({
+    top: nextIndex * feed.clientHeight,
+    behavior: "smooth"
+  });
+
+}
+
+
+$("shortViewerUp").onclick =
+  () => scrollShortViewer(-1);
+
+
+$("shortViewerDown").onclick =
+  () => scrollShortViewer(1);
+
+
+document.addEventListener("keydown", event => {
+  const homeStoryIsOpen =
+    $("homeStoryViewerModal").classList.contains("active");
+  const shortsAreOpen =
+    $("shortViewerModal").classList.contains("active");
+
+  if (homeStoryIsOpen) {
+    if (event.key === "ArrowLeft") {
+      event.preventDefault();
+      stepHomeStory(-1);
+    } else if (event.key === "ArrowRight") {
+      event.preventDefault();
+      stepHomeStory(1);
+    }
+
+    return;
+  }
+
+  if (!shortsAreOpen) {
+    return;
+  }
+
+  if (event.key === "ArrowUp") {
+    event.preventDefault();
+    scrollShortViewer(-1);
+  } else if (event.key === "ArrowDown") {
+    event.preventDefault();
+    scrollShortViewer(1);
+  }
+});
