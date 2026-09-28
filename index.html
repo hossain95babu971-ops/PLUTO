@@ -82,115 +82,6 @@
 </button>
 
 
-<!-- ================================
-     FORGOT PASSWORD
-================================ -->
-
-<div
-  class="modal"
-  id="forgotPasswordModal"
->
-
-  <div class="modal-box">
-
-    <div class="modal-header">
-
-      <h2>Reset Password</h2>
-
-      <button
-        class="circle-btn"
-        data-close="forgotPasswordModal"
-        type="button"
-      >
-        <i class="fa-solid fa-xmark"></i>
-      </button>
-
-    </div>
-
-
-    <p class="password-help">
-      Enter your account email.
-      We'll send you a password reset link.
-    </p>
-
-
-    <input
-      class="form-input"
-      id="resetEmail"
-      type="email"
-      placeholder="Email address"
-      autocomplete="email"
-    >
-
-
-    <button
-      class="primary-btn full-btn"
-      id="sendResetBtn"
-      type="button"
-    >
-      Send Reset Link
-    </button>
-
-  </div>
-
-</div>
-
-
-<!-- ================================
-     CREATE NEW PASSWORD
-================================ -->
-
-<div
-  class="modal"
-  id="newPasswordModal"
->
-
-  <div class="modal-box">
-
-    <div class="modal-header">
-
-      <h2>Create New Password</h2>
-
-    </div>
-
-
-    <p class="password-help">
-      Enter your new PLUTO password.
-    </p>
-
-
-    <input
-      class="form-input"
-      id="newPassword"
-      type="password"
-      placeholder="New password"
-      minlength="6"
-      autocomplete="new-password"
-    >
-
-
-    <input
-      class="form-input"
-      id="confirmNewPassword"
-      type="password"
-      placeholder="Confirm new password"
-      minlength="6"
-      autocomplete="new-password"
-    >
-
-
-    <button
-      class="primary-btn full-btn"
-      id="saveNewPasswordBtn"
-      type="button"
-    >
-      Save New Password
-    </button>
-
-  </div>
-
-</div>
-
       <button
         class="google-btn"
         id="googleLoginBtn"
@@ -471,6 +362,16 @@
     </div>
 
 
+    <section class="shorts-stories" aria-label="Short videos">
+      <div class="shorts-stories-heading">
+        <h2>Shorts</h2>
+      </div>
+      <div class="shorts-story-list" id="shortStories">
+        <div class="empty-state">Loading Shorts...</div>
+      </div>
+    </section>
+
+
     <div id="postsContainer">
 
       <div class="empty-state">
@@ -489,15 +390,21 @@
     id="videoPage"
   >
 
-  <!-- HiAnime Card -->
-<div class="hianime-card" id="hianimeCard">
-  <div class="hianime-card-content">
-    <div class="hianime-logo">HiAnime</div>
-    <h2>Watch Anime</h2>
-    <p>Explore anime inside Pluto</p>
-    <button id="openHianimeBtn">Open HiAnime</button>
-  </div>
-</div>
+  <section class="video-feature-cards" id="videoFeatureCards" aria-label="Video features">
+    <div class="video-short-placeholder" id="videoShortStatus">
+      Finding videos under 30 seconds...
+    </div>
+
+    <div class="hianime-card" id="hianimeCard">
+      <div class="hianime-card-content">
+        <div class="hianime-logo">HiAnime</div>
+        <h2>Watch Anime</h2>
+        <p>Explore anime inside Pluto</p>
+        <button id="openHianimeBtn">Anime Original</button>
+      </div>
+    </div>
+  </section>
+
 
 <!-- HiAnime Viewer -->
 <div id="hianimeViewer" class="hianime-viewer">
@@ -530,9 +437,55 @@
 
     </div>
 
-    <div id="videoContainer"></div>
+    <div id="videoContainer">
+      <div class="empty-state">Open Videos to load posts.</div>
+    </div>
 
   </section>
+
+  <div class="modal short-viewer-modal" id="shortViewerModal">
+    <div class="short-viewer-shell">
+      <button class="short-viewer-close" data-close="shortViewerModal" type="button" aria-label="Close Shorts">
+        <i class="fa-solid fa-xmark"></i>
+      </button>
+      <div class="short-viewer-feed" id="shortViewerFeed" aria-label="Short videos"></div>
+      <button class="short-viewer-nav short-viewer-up" id="shortViewerUp" type="button" aria-label="Previous Short">
+        <i class="fa-solid fa-chevron-up"></i>
+      </button>
+      <button class="short-viewer-nav short-viewer-down" id="shortViewerDown" type="button" aria-label="Next Short">
+        <i class="fa-solid fa-chevron-down"></i>
+      </button>
+    </div>
+  </div>
+
+  <div class="modal home-story-viewer-modal" id="homeStoryViewerModal">
+    <div class="home-story-viewer" id="homeStoryViewer">
+      <button class="home-story-close" data-close="homeStoryViewerModal" type="button" aria-label="Close story">
+        <i class="fa-solid fa-xmark"></i>
+      </button>
+      <div class="home-story-progress" id="homeStoryProgress"></div>
+      <video id="homeStoryVideo" playsinline controls></video>
+      <button class="home-story-nav home-story-prev" id="homeStoryPrev" type="button" aria-label="Previous story">
+        <i class="fa-solid fa-chevron-left"></i>
+      </button>
+      <button class="home-story-nav home-story-next" id="homeStoryNext" type="button" aria-label="Next story">
+        <i class="fa-solid fa-chevron-right"></i>
+      </button>
+      <div class="home-story-tap-zones" aria-hidden="true">
+        <span id="homeStoryTapPrev"></span>
+        <span id="homeStoryTapNext"></span>
+      </div>
+      <div class="home-story-creator">
+        <span class="home-story-avatar" id="homeStoryAvatar"></span>
+        <div>
+          <strong id="homeStoryName"></strong>
+          <span id="homeStoryUsername"></span>
+        </div>
+      </div>
+      <p class="home-story-bio" id="homeStoryBio"></p>
+      <p class="home-story-caption" id="homeStoryCaption"></p>
+    </div>
+  </div>
 
 
   <!-- MESSAGES -->
@@ -864,7 +817,6 @@
 
   </section>
 
-
   <!-- SETTINGS -->
 
   <section
@@ -893,20 +845,22 @@
         </span>
       </button>
 
-       <button
-  class="forgot-password-btn"
-  id="forgotPasswordBtn"
-  type="button"
->
-  Reset Password
-</button>
+      <button
+        class="setting-item"
+        id="resetPasswordSettingBtn"
+        type="button"
+      >
+        <i class="fa-solid fa-key"></i>
 
+        <span>
+          Reset Password
+        </span>
+      </button>
 
-    </div>
 
   </section>
 
-</div>
+</div>    
 
 </main>
 
@@ -969,7 +923,7 @@
 
     <div class="modal-header">
 
-      <h2>Create Post</h2>
+      <h2 id="postModalTitle">Create Post</h2>
 
       <button
         class="circle-btn"
@@ -980,6 +934,8 @@
       </button>
 
     </div>
+
+    <p class="post-mode-hint" id="postModeHint"></p>
 
     <textarea
       id="postText"
@@ -998,6 +954,25 @@
       class="upload-preview"
       id="uploadPreview"
     ></div>
+
+    <div class="short-trim-editor hidden" id="shortTrimEditor">
+      <video id="shortTrimPreview" controls playsinline preload="metadata"></video>
+      <video class="hidden" id="shortTrimResultPreview" controls playsinline preload="metadata"></video>
+      <div class="short-trim-times">
+        <label>
+          Start (seconds)
+          <input id="shortTrimStart" type="number" min="0" step="0.1" value="0">
+        </label>
+        <label>
+          End (seconds)
+          <input id="shortTrimEnd" type="number" min="0.1" step="0.1" value="20">
+        </label>
+      </div>
+      <p id="shortTrimStatus" aria-live="polite">Choose a clip up to 20 seconds.</p>
+      <button class="secondary-btn full-btn" id="trimShortBtn" type="button">
+        Trim Clip
+      </button>
+    </div>
 
     <button
       class="primary-btn full-btn"
