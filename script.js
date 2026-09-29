@@ -146,6 +146,10 @@ function closeModal(id) {
       "active"
     );
 
+    document.body.classList.remove(
+      "scroll-chrome-hidden"
+    );
+
     if (id === "shortViewerModal") {
 
       shortViewerObserver?.disconnect();
@@ -176,6 +180,48 @@ function closeModal(id) {
     }
 
   }
+
+}
+
+
+function setGuestControls(isGuest) {
+
+  $("menuUserStatus").textContent =
+    isGuest ? "Guest mode" : "Signed in";
+
+  if (isGuest) {
+    $("menuUserName").textContent = "PLUTO Guest";
+    $("menuUserEmail").textContent = "";
+  }
+
+  $("myProfileButton").hidden = isGuest;
+  $("sideMenu")
+    .querySelector('[data-page-open="settingsPage"]')
+    .hidden = isGuest;
+  $("logoutButton").hidden = isGuest;
+  $("guestAuthButton").hidden = !isGuest;
+
+}
+
+
+function showSignIn() {
+
+  $("signupForm").classList.remove("active");
+  $("loginForm").classList.add("active");
+  $("authPage").classList.remove("hidden");
+  closeMenu();
+
+}
+
+
+function requireAuth() {
+
+  if (currentUser) {
+    return true;
+  }
+
+  showSignIn();
+  return false;
 
 }
 
@@ -314,6 +360,16 @@ document
 ========================================= */
 
 function openPage(id) {
+
+  if (
+    !currentUser &&
+    ["messagePage", "notificationPage", "settingsPage"].includes(id)
+  ) {
+
+    requireAuth();
+    return;
+
+  }
 
   document
     .querySelectorAll(
@@ -478,6 +534,74 @@ window.addEventListener(
 );
 
 
+let previousChromeScrollY =
+  window.scrollY;
+
+let chromeScrollFramePending =
+  false;
+
+
+window.addEventListener(
+  "scroll",
+  () => {
+
+    if (chromeScrollFramePending) {
+      return;
+    }
+
+    chromeScrollFramePending = true;
+
+    window.requestAnimationFrame(() => {
+
+      chromeScrollFramePending = false;
+
+      const currentScrollY =
+        Math.max(0, window.scrollY);
+
+      const scrollDelta =
+        currentScrollY - previousChromeScrollY;
+
+      const overlayIsOpen =
+        document.querySelector(".modal.active") ||
+        $("hianimeViewer")?.classList.contains("active");
+
+      if (overlayIsOpen) {
+        previousChromeScrollY = currentScrollY;
+        return;
+      }
+
+      if (currentScrollY <= 48) {
+        document.body.classList.remove(
+          "scroll-chrome-hidden"
+        );
+      }
+
+      else if (
+        scrollDelta >= 8 &&
+        currentScrollY > 48
+      ) {
+        document.body.classList.add(
+          "scroll-chrome-hidden"
+        );
+      }
+
+      else if (
+        scrollDelta <= -5
+      ) {
+        document.body.classList.remove(
+          "scroll-chrome-hidden"
+        );
+      }
+
+      previousChromeScrollY = currentScrollY;
+
+    });
+
+  },
+  { passive: true }
+);
+
+
 /* =========================================
    SIDE MENU
 ========================================= */
@@ -541,6 +665,17 @@ if ($("overlay")) {
 /* =========================================
    AUTH FORM SWITCH
 ========================================= */
+
+$("guestAuthButton").onclick =
+  showSignIn;
+
+
+$("continueAsGuest").onclick =
+() => {
+
+  $("authPage").classList.add("hidden");
+
+};
 
 $("showSignup").onclick =
 () => {
@@ -1258,12 +1393,7 @@ async function initializeAuth() {
     );
 
 
-    $("authPage")
-      .classList.remove(
-        "hidden"
-      );
-
-
+    await handleSession(null);
     return;
 
   }
@@ -1337,9 +1467,12 @@ async function handleSession(
 
 
     $("authPage")
-      .classList.remove(
+      .classList.add(
         "hidden"
       );
+
+
+    setGuestControls(true);
 
 
     if (lastSeenTimer) {
@@ -1416,6 +1549,10 @@ async function handleSession(
     onlineUsers.clear();
 
 
+    openPage("feedPage");
+    await loadFeed();
+
+
     return;
 
   }
@@ -1426,6 +1563,7 @@ async function handleSession(
 
 
   await loadCurrentProfile();
+  setGuestControls(false);
 
 
   /*
@@ -3496,6 +3634,10 @@ async function trimVideoLocally(
 
 function openShortUpload() {
 
+  if (!requireAuth()) {
+    return;
+  }
+
   setPostMode("short");
   openModal("postModal");
   $("postMedia").click();
@@ -3504,6 +3646,10 @@ function openShortUpload() {
 
 $("openCreatePost").onclick =
 () => {
+
+  if (!requireAuth()) {
+    return;
+  }
 
   setPostMode("post");
   openModal(
@@ -3515,6 +3661,10 @@ $("openCreatePost").onclick =
 
 $("profileCreatePost").onclick =
 () => {
+
+  if (!requireAuth()) {
+    return;
+  }
 
   setPostMode("post");
   openModal(
@@ -3532,6 +3682,10 @@ document
 
     button.onclick =
     () => {
+
+      if (!requireAuth()) {
+        return;
+      }
 
       setPostMode("post");
       openModal(
@@ -3675,10 +3829,8 @@ async () => {
 $("publishPost").onclick =
 async () => {
 
-  if (!currentUser) {
-
+  if (!requireAuth()) {
     return;
-
   }
 
 
@@ -3984,13 +4136,6 @@ async function enrichPost(post) {
 ========================================= */
 
 async function loadFeed() {
-
-  if (!currentUser) {
-
-    return;
-
-  }
-
 
   const loadGeneration =
     ++feedLoadGeneration;
@@ -4598,10 +4743,8 @@ async function toggleLike(
   postId
 ) {
 
-  if (!currentUser) {
-
+  if (!requireAuth()) {
     return;
-
   }
 
 
@@ -4837,11 +4980,13 @@ async () => {
       .trim();
 
 
-  if (
-    !text ||
-    !activePostId ||
-    !currentUser
-  ) {
+  if (!currentUser) {
+    requireAuth();
+    return;
+  }
+
+
+  if (!text || !activePostId) {
 
     return;
 
@@ -4995,10 +5140,7 @@ async function openUserProfile(
   userId
 ) {
 
-  if (
-    !currentUser ||
-    !userId
-  ) {
+  if (!userId) {
 
     return;
 
@@ -5054,10 +5196,9 @@ async function openUserProfile(
 
     $("profileEmail")
       .textContent =
-        userId ===
-        currentUser.id
+        userId === currentUser?.id
 
-          ? currentUser.email ||
+          ? currentUser?.email ||
             ""
 
           : "";
@@ -5108,8 +5249,7 @@ async function openUserProfile(
 
 
     const own =
-      userId ===
-      currentUser.id;
+      userId === currentUser?.id;
 
 
     document
@@ -5146,6 +5286,10 @@ async function openUserProfile(
         .onclick =
         () => {
 
+          if (!requireAuth()) {
+            return;
+          }
+
           sendFriendRequest(
             userId,
             data
@@ -5157,6 +5301,10 @@ async function openUserProfile(
       $("profileMessageBtn")
         .onclick =
         () => {
+
+          if (!requireAuth()) {
+            return;
+          }
 
           openChat(
             userId,
@@ -5339,10 +5487,8 @@ async function refreshPostsUI() {
 $("myProfileButton").onclick =
 () => {
 
-  if (!currentUser) {
-
+  if (!requireAuth()) {
     return;
-
   }
 
 
@@ -5359,10 +5505,8 @@ $("myProfileButton").onclick =
 $("feedAvatar").onclick =
 () => {
 
-  if (!currentUser) {
-
+  if (!requireAuth()) {
     return;
-
   }
 
 
@@ -5376,10 +5520,8 @@ $("feedAvatar").onclick =
 $("menuAvatar").onclick =
 () => {
 
-  if (!currentUser) {
-
+  if (!requireAuth()) {
     return;
-
   }
 
 
@@ -5628,11 +5770,12 @@ async function sendFriendRequest(
   profile
 ) {
 
-  if (
-    !currentUser ||
-    receiverId ===
-      currentUser.id
-  ) {
+  if (!requireAuth()) {
+    return;
+  }
+
+
+  if (receiverId === currentUser.id) {
 
     return;
 
@@ -6315,10 +6458,8 @@ async function openChat(
   profile
 ) {
 
-  if (!currentUser) {
-
+  if (!requireAuth()) {
     return;
-
   }
 
 
@@ -6546,17 +6687,18 @@ function subscribeMessages() {
 
 async function sendMessage() {
 
+  if (!currentUser) {
+    requireAuth();
+    return;
+  }
+
   const text =
     $("messageInput")
       .value
       .trim();
 
 
-  if (
-    !text ||
-    !activeConversationId ||
-    !currentUser
-  ) {
+  if (!text || !activeConversationId) {
 
     return;
 
@@ -7440,10 +7582,6 @@ async function renderShortVideoCards() {
 
 async function loadVideoLibrary() {
 
-  if (!currentUser) {
-    return;
-  }
-
   const container = $("videoContainer");
 
   container.innerHTML =
@@ -7619,7 +7757,7 @@ $("themeToggle").onclick =
 async () => {
 
   if (
-    !currentUser ||
+    !requireAuth() ||
     !currentProfile
   ) {
 
