@@ -159,6 +159,12 @@ button {
   padding: 15px 18px;
   background: var(--card);
   border-bottom: 1px solid var(--border);
+  transition: transform .22s ease;
+  will-change: transform;
+}
+
+body.scroll-chrome-hidden .top-header {
+  transform: translateY(-110%);
 }
 
 .top-row {
@@ -1224,6 +1230,22 @@ margin-top: -50px;
   align-items: center;
   background: var(--card);
   border-top: 1px solid var(--border);
+  transition:
+    transform .22s ease,
+    visibility .22s ease;
+  will-change: transform;
+}
+
+body.scroll-chrome-hidden .bottom-nav {
+  transform: translateY(110%);
+  visibility: hidden;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .top-header,
+  .bottom-nav {
+    transition: none;
+  }
 }
 
 .nav-item {
@@ -2342,7 +2364,7 @@ body.dark-mode
 
 .video-feature-cards {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
   margin: 12px 0 18px;
 }
