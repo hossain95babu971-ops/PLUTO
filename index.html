@@ -30,7 +30,7 @@
 ================================ -->
 
 <div
-  class="auth-page"
+  class="auth-page hidden"
   id="authPage"
 >
 
@@ -88,6 +88,14 @@
       >
         <i class="fa-brands fa-google"></i>
         Continue with Google
+      </button>
+
+      <button
+        class="secondary-btn full-btn"
+        id="continueAsGuest"
+        type="button"
+      >
+        Continue browsing
       </button>
 
       <p class="auth-switch">
@@ -189,7 +197,7 @@
     <div>
       <h2>PLUTO</h2>
       <p id="menuUserStatus">
-        Signed in
+        Guest mode
       </p>
     </div>
 
@@ -215,7 +223,7 @@
 
     <div>
       <h3 id="menuUserName">
-        PLUTO User
+        PLUTO Guest
       </h3>
 
       <p id="menuUserEmail"></p>
@@ -229,6 +237,7 @@
     <button
       class="menu-item"
       id="myProfileButton"
+      hidden
     >
       <i class="fa-solid fa-user"></i>
       Profile
@@ -237,6 +246,7 @@
     <button
       class="menu-item"
       data-page-open="settingsPage"
+      hidden
     >
       <i class="fa-solid fa-gear"></i>
       Settings
@@ -245,9 +255,19 @@
     <button
       class="menu-item logout-item"
       id="logoutButton"
+      hidden
     >
       <i class="fa-solid fa-right-from-bracket"></i>
       Log Out
+    </button>
+
+    <button
+      class="menu-item"
+      id="guestAuthButton"
+      type="button"
+    >
+      <i class="fa-solid fa-right-to-bracket"></i>
+      Sign In / Create Account
     </button>
 
   </div>
